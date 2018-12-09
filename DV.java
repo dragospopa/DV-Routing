@@ -8,10 +8,12 @@ public class DV implements RoutingAlgorithm {
     static int LOCAL = -1;
     static int UNKNOWN = -2;
     static int INFINITY = 60;
+    static int TIMEOUT = 6;
+    static int TTL_TIMER = 4;
 
     // Keep the name of the current node, it may prove handy at a certain point.
     // I will remove it, if not.
-    protected int name;
+    private int name;
 
     private int updateInterval;
     private boolean allowPReverse;
@@ -48,8 +50,6 @@ public class DV implements RoutingAlgorithm {
     }
 
     public int getNextHop(int destination) {
-        //System.out.println("These are the available routes: ");
-        //this.showRoutes();
         DVRoutingTableEntry destinationEntry = this.routingTable.get(destination);
         if (destinationEntry == null) return UNKNOWN;
         if (destinationEntry.getMetric() == INFINITY) return UNKNOWN;
@@ -65,7 +65,22 @@ public class DV implements RoutingAlgorithm {
                 dvEntry.getValue().setTime(this.router.getCurrentTime());
             }
         }
-        //showRoutes();
+
+        if (allowExpire) {
+            Iterator<DVRoutingTableEntry> it = this.routingTable.values().iterator();
+            while (it.hasNext()) {
+                DVRoutingTableEntry dvEntry = it.next();
+                if (dvEntry.getDestination() == this.router.getId()) continue;
+                if (dvEntry.getMetric() != INFINITY) {
+                    if (dvEntry.getTime() + TIMEOUT * updateInterval <= router.getCurrentTime()) {
+                        dvEntry.setMetric(INFINITY);
+                        dvEntry.setTime(router.getCurrentTime());
+                    }
+                } else if (dvEntry.getTime() + TTL_TIMER * updateInterval <= router.getCurrentTime()) {
+                    it.remove();
+                }
+            }
+        }
     }
 
     public Packet generateRoutingPacket(int iface) {
@@ -77,58 +92,44 @@ public class DV implements RoutingAlgorithm {
         if (!router.getInterfaceState(iface)) {
             return null;
         }
-
         for (HashMap.Entry<Integer, DVRoutingTableEntry> pair : this.routingTable.entrySet()) {
             DVRoutingTableEntry payloadEntry = new DVRoutingTableEntry(pair.getValue().getDestination(), pair.getValue().getInterface(), pair.getValue().getMetric(), pair.getValue().getTime());
             if (this.allowPReverse) {
-                //System.out.println("!!!Doing the PReverse Thing!");
                 if (pair.getValue().getInterface() == iface) payloadEntry.setMetric(INFINITY);
             }
             payload.addEntry(payloadEntry);
         }
-
         routingPacket.setPayload(payload);
-        //System.out.println("Sending Packet { source: " + routingPacket.getSource() + "; destination: " + routingPacket.getDestination() + "; type: " + routingPacket.getType() + "; payload: " + routingPacket.getPayload().getData() + " }");
         return routingPacket;
     }
 
     public void processRoutingPacket(Packet p, int iface) {
-        //System.out.println("Received Packet from interface " + iface + ": { source: " + p.getSource() + "; destination: " + p.getDestination() + "; type: " + p.getType() + "; payload: " + p.getPayload().getData() + " }");
-
         for (Object o : p.getPayload().getData()) {
             DVRoutingTableEntry payloadEntry = (DVRoutingTableEntry) o;
-            //if (this.routingTable.get(payloadEntry.getKey()) != null) {
-            //    System.out.println("Stuff: " + this.routingTable.get(payloadEntry.getKey()).getMetric() + " " + (payloadEntry.getValue().getMetric() + this.router.getLinks()[iface].getInterfaceWeight(this.name)));
-            //}
-            if (this.routingTable.get(payloadEntry.getDestination()) == null) {
 
-                //System.out.println("First time " + this.router.getId() + " has heard of router: " + payloadEntry.getDestination());
-                //DVRoutingTableEntry dvEntry = System.out.println("Adding this entry: "+ dvEntry.toString());
-                this.routingTable.put(payloadEntry.getDestination(), new DVRoutingTableEntry(payloadEntry.getDestination(), iface, payloadEntry.getMetric() + this.router.getLinks()[iface].getInterfaceWeight(this.name), payloadEntry.getTime()));
+            // Set this up before other conditionals to avoid complications.
+            int metric = payloadEntry.getMetric() + router.getInterfaceWeight(iface) < INFINITY ? payloadEntry.getMetric() + router.getInterfaceWeight(iface) : INFINITY;
 
-            } else if (this.routingTable.get(payloadEntry.getDestination()).getMetric() > payloadEntry.getMetric() + this.router.getLinks()[iface].getInterfaceWeight(this.name) &&
-                    this.routingTable.get(payloadEntry.getDestination()).getInterface() != iface) {
-
-                //System.out.println("Router " + this.router.getId() + " has received a better option for router " + payloadEntry.getDestination() + "; with metric " + (payloadEntry.getMetric() + this.router.getLinks()[iface].getInterfaceWeight(this.name)) + " and iface " + iface);
-                this.routingTable.get(payloadEntry.getDestination()).setMetric(payloadEntry.getMetric() + this.router.getLinks()[iface].getInterfaceWeight(this.name));
-                this.routingTable.get(payloadEntry.getDestination()).setInterface(iface);
-
-            } else if (this.routingTable.get(payloadEntry.getDestination()).getInterface() == iface) {
-                this.routingTable.get(payloadEntry.getDestination()).setMetric(Math.min(INFINITY, payloadEntry.getMetric() + this.router.getLinks()[iface].getInterfaceWeight(this.name)));
-
-            } else {
-                //System.out.println("This is what I have now in the routing table about this: " + this.routingTable.get(payloadEntry.getDestination()).toString() + ". Not doing anything.");
+            if (!this.routingTable.containsKey(payloadEntry.getDestination()) && metric != INFINITY)
+                this.routingTable.put(payloadEntry.getDestination(), new DVRoutingTableEntry(payloadEntry.getDestination(), iface, metric, router.getCurrentTime()));
+            else {
+                if (!this.routingTable.containsKey(payloadEntry.getDestination())) continue;
+                DVRoutingTableEntry dvEntry = this.routingTable.get(payloadEntry.getDestination());
+                if (dvEntry.getInterface() == iface) {
+                    if (!(dvEntry.getMetric() == INFINITY && metric == INFINITY))
+                        dvEntry.setTime(this.router.getCurrentTime());
+                    dvEntry.setMetric(metric);
+                } else if (metric < dvEntry.getMetric()) {
+                    dvEntry.setInterface(iface);
+                    dvEntry.setMetric(metric);
+                    dvEntry.setTime(this.router.getCurrentTime());
+                }
             }
         }
-
-        //showRoutes();
     }
 
     public void showRoutes() {
         System.out.println("Router " + this.name);
-        //for (Link link : this.router.getLinks())
-        //    System.out.println(link.toString() + " with status " + link.isUp());
-        //System.out.println("and in the routing table:");
         for (HashMap.Entry<Integer, DVRoutingTableEntry> mapEntry : this.routingTable.entrySet()) {
             System.out.println(mapEntry.getValue().toString());
         }
