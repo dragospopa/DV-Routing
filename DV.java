@@ -84,26 +84,30 @@ public class DV implements RoutingAlgorithm {
     }
 
     public Packet generateRoutingPacket(int iface) {
-        Packet routingPacket = new Packet(this.name, Packet.BROADCAST);
-        routingPacket.setType(Packet.ROUTING);
-        Payload payload = new Payload();
+        if (this.router.getCurrentTime() % updateInterval == 0) {
+            Packet routingPacket = new Packet(this.name, Packet.BROADCAST);
+            routingPacket.setType(Packet.ROUTING);
+            Payload payload = new Payload();
 
-        // If link is down, don't do anything
-        if (!router.getInterfaceState(iface)) {
-            return null;
-        }
-        for (HashMap.Entry<Integer, DVRoutingTableEntry> pair : this.routingTable.entrySet()) {
-            DVRoutingTableEntry payloadEntry = new DVRoutingTableEntry(pair.getValue().getDestination(), pair.getValue().getInterface(), pair.getValue().getMetric(), pair.getValue().getTime());
-            if (this.allowPReverse) {
-                if (pair.getValue().getInterface() == iface) payloadEntry.setMetric(INFINITY);
+            // If link is down, don't do anything
+            if (!router.getInterfaceState(iface)) {
+                return null;
             }
-            payload.addEntry(payloadEntry);
+            for (HashMap.Entry<Integer, DVRoutingTableEntry> pair : this.routingTable.entrySet()) {
+                DVRoutingTableEntry payloadEntry = new DVRoutingTableEntry(pair.getValue().getDestination(), pair.getValue().getInterface(), pair.getValue().getMetric(), pair.getValue().getTime());
+                if (this.allowPReverse) {
+                    if (pair.getValue().getInterface() == iface) payloadEntry.setMetric(INFINITY);
+                }
+                payload.addEntry(payloadEntry);
+            }
+            routingPacket.setPayload(payload);
+            return routingPacket;
         }
-        routingPacket.setPayload(payload);
-        return routingPacket;
+        return null;
     }
 
     public void processRoutingPacket(Packet p, int iface) {
+
         for (Object o : p.getPayload().getData()) {
             DVRoutingTableEntry payloadEntry = (DVRoutingTableEntry) o;
 
@@ -126,6 +130,7 @@ public class DV implements RoutingAlgorithm {
                 }
             }
         }
+
     }
 
     public void showRoutes() {
