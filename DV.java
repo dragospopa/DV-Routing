@@ -8,6 +8,8 @@ public class DV implements RoutingAlgorithm {
     static int LOCAL = -1;
     static int UNKNOWN = -2;
     static int INFINITY = 60;
+
+    // Constants used in relation to DVEntry ttl expiration protocols
     static int TIMEOUT = 6;
     static int TTL_TIMER = 4;
 
@@ -21,7 +23,8 @@ public class DV implements RoutingAlgorithm {
     private Router router;
 
     // Use a HashMap for fast access to entries.
-    // The issue is that the destionation will be stored twice - but who cares?!
+    // The issue is that the destionation will be
+    // stored twice, but easy access turns the balance.
     private HashMap<Integer, DVRoutingTableEntry> routingTable;
 
     public DV() {
@@ -43,12 +46,18 @@ public class DV implements RoutingAlgorithm {
         this.allowExpire = flag;
     }
 
+    // Initalise the routing algorthm. This must be called once the
+    // <code>setRouterObject</code> has been called.
     public void initalise() {
         this.name = this.router.getId();
         this.routingTable = new HashMap<>();
         this.routingTable.put(this.name, new DVRoutingTableEntry(name, LOCAL, 0, INFINITY));
     }
 
+    // Given a destination address, returns
+    // the out going interface for that address,
+    // -1 is returned for a local address,
+    // -2 is an unknown address.
     public int getNextHop(int destination) {
         DVRoutingTableEntry destinationEntry = this.routingTable.get(destination);
         if (destinationEntry == null) return UNKNOWN;
@@ -56,6 +65,9 @@ public class DV implements RoutingAlgorithm {
         return destinationEntry.getInterface();
     }
 
+    // A periodic task to tidy up the routing
+    // table. This method is called before
+    // processing any new packets each round.
     public void tidyTable() {
 
         // Update links that have just been downed.
@@ -66,6 +78,7 @@ public class DV implements RoutingAlgorithm {
             }
         }
 
+        // Handle case when routing entries have a time to live bound to them.
         if (allowExpire) {
             Iterator<DVRoutingTableEntry> it = this.routingTable.values().iterator();
             while (it.hasNext()) {
@@ -83,29 +96,46 @@ public class DV implements RoutingAlgorithm {
         }
     }
 
+    // Generates a routing packet from the routing table.
     public Packet generateRoutingPacket(int iface) {
+
+        // If-statement handles makes the method generate a Packet
+        // if-only enough time has passed since the last update.
         if (this.router.getCurrentTime() % updateInterval == 0) {
+
             Packet routingPacket = new Packet(this.name, Packet.BROADCAST);
             routingPacket.setType(Packet.ROUTING);
             Payload payload = new Payload();
 
-            // If link is down, don't do anything
+            // If link is down, don't do anything. Faster then
+            // just checking in the routing table for INFINITY
+            // record on this link as records will not always be
+            // updated instantly, especially with PReverse off.
             if (!router.getInterfaceState(iface)) {
                 return null;
             }
+
+            // Append DVEntry information that needs to be sent on
+            // the link to the payload of the new routing Packet.
             for (HashMap.Entry<Integer, DVRoutingTableEntry> pair : this.routingTable.entrySet()) {
                 DVRoutingTableEntry payloadEntry = new DVRoutingTableEntry(pair.getValue().getDestination(), pair.getValue().getInterface(), pair.getValue().getMetric(), pair.getValue().getTime());
+
+                // PReverse technique requires us to send INFINITY metrics on ifaces
+                // that current router uses the same iface to get to other nodes.
                 if (this.allowPReverse) {
                     if (pair.getValue().getInterface() == iface) payloadEntry.setMetric(INFINITY);
                 }
                 payload.addEntry(payloadEntry);
             }
+
             routingPacket.setPayload(payload);
             return routingPacket;
         }
+        // Return null if updateInterval condition is not fullfiled
         return null;
     }
 
+    // Given a routing packet from another host process it and add it to the routing table.
     public void processRoutingPacket(Packet p, int iface) {
 
         for (Object o : p.getPayload().getData()) {
@@ -130,9 +160,16 @@ public class DV implements RoutingAlgorithm {
                 }
             }
         }
-
     }
 
+    /**
+     * Prints the routing table to the screen.
+     * The format is :
+     * Router <id>
+     * d <destination> i <interface> m <metric>
+     * d <destination> i <interface> m <metric>
+     * d <destination> i <interface> m <metric>
+     */
     public void showRoutes() {
         System.out.println("Router " + this.name);
         for (HashMap.Entry<Integer, DVRoutingTableEntry> mapEntry : this.routingTable.entrySet()) {
